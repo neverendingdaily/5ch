@@ -2,14 +2,52 @@ import "dotenv/config";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { analyzeThread } from "./gemini.js";
-import { build5chPrompt } from "./prompts/5ch.js";
+import { build5chBasicPrompt } from "./prompts/5ch-basic.js";
+import { build5chBlogPrompt } from "./prompts/5ch-blog.js";
+import { buildYoutubePrompt } from "./prompts/youtube.js";
+import { buildAmazonPrompt } from "./prompts/amazon.js";
+import { buildYahooXPrompt } from "./prompts/yahoo-x.js";
 import { buildGirlsChannelPrompt } from "./prompts/girlschannel.js";
-import { buildRedditPrompt } from "./prompts/reddit.js";
+import { buildRedditBasicPrompt } from "./prompts/reddit-basic.js";
+import { buildRedditAffilPrompt } from "./prompts/reddit-affil.js";
+import { buildHackernewsPrompt } from "./prompts/hackernews.js";
 
-type Board = "5ch" | "girlschannel" | "reddit";
+type AnalysisType =
+  | "5ch-basic"
+  | "5ch-blog"
+  | "youtube"
+  | "amazon"
+  | "yahoo-x"
+  | "girlschannel"
+  | "reddit-basic"
+  | "reddit-affil"
+  | "hackernews";
+
 type ModelAlias = "flash" | "pro";
 
-const BOARDS: Board[] = ["5ch", "girlschannel", "reddit"];
+const ANALYSIS_TYPES: AnalysisType[] = [
+  "5ch-basic",
+  "5ch-blog",
+  "youtube",
+  "amazon",
+  "yahoo-x",
+  "girlschannel",
+  "reddit-basic",
+  "reddit-affil",
+  "hackernews",
+];
+
+const TYPE_LABELS: Record<AnalysisType, string> = {
+  "5ch-basic":    "5ちゃんねる分析・まとめ",
+  "5ch-blog":     "まとめサイト記事自動化",
+  "youtube":      "YouTube/TikTokコメント分析",
+  "amazon":       "Amazon/サービスレビュー分析",
+  "yahoo-x":      "Yahoo!/X 対立・議論構造化",
+  "girlschannel": "ガールズちゃんねる分析",
+  "reddit-basic": "Reddit特化型分析",
+  "reddit-affil": "Redditアフィリエイト記事化",
+  "hackernews":   "HackerNews/海外テックフォーラム",
+};
 
 const MODEL_MAP: Record<ModelAlias, string> = {
   flash: "gemini-2.5-flash",
@@ -20,7 +58,7 @@ const GREEN = "\x1b[32m";
 const RESET = "\x1b[0m";
 
 interface CliArgs {
-  board: Board;
+  analysisType: AnalysisType;
   input: string;
   mode: "file" | "text";
   output?: string;
@@ -30,24 +68,29 @@ interface CliArgs {
 
 function printUsage(): void {
   console.error("使い方:");
-  console.error('  npx tsx src/index.ts --board <掲示板> --text "<本文>" [オプション]');
-  console.error("  npx tsx src/index.ts --board <掲示板> <ファイルパス> [オプション]");
+  console.error('  npx tsx src/index.ts --type <タイプ> --text "<本文>" [オプション]');
+  console.error("  npx tsx src/index.ts --type <タイプ> <ファイルパス> [オプション]");
   console.error("");
   console.error("必須オプション:");
-  console.error("  --board          対象掲示板: 5ch | girlschannel | reddit");
+  console.error("  --type, -t <タイプ>  分析タイプを指定");
+  console.error("");
+  console.error("  タイプ一覧:");
+  for (const [key, label] of Object.entries(TYPE_LABELS)) {
+    console.error(`    ${key.padEnd(16)} ${label}`);
+  }
   console.error("");
   console.error("入力オプション（どちらか必須）:");
-  console.error("  --text <テキスト>  スレッド本文を直接指定");
-  console.error("  <ファイルパス>     テキストファイルのパス");
+  console.error('  --text "<テキスト>"  スレッド本文を直接指定');
+  console.error("  <ファイルパス>       テキストファイルのパス");
   console.error("");
   console.error("任意オプション:");
-  console.error("  --model <モデル>   使用するAIモデル: flash（デフォルト）| pro");
+  console.error("  --model <モデル>     使用するAIモデル: flash（デフォルト）| pro");
   console.error("  --output, -o <パス>  結果の保存先ファイルパス");
-  console.error("  --json             出力をJSON形式にする（Supabase保存・React連携向け）");
+  console.error("  --json               出力をJSON形式にする");
   console.error("");
   console.error("例:");
-  console.error('  npx tsx src/index.ts --board 5ch --text "1: テスト" --model pro -o result.txt');
-  console.error("  npx tsx src/index.ts --board reddit ./thread.txt --output ./out/result.md");
+  console.error('  npx tsx src/index.ts --type youtube --text "コメント1: 神動画 コメント2: 感動した"');
+  console.error('  npx tsx src/index.ts -t reddit-basic ./thread.txt --model pro --json -o result.json');
 }
 
 function parseArgs(): CliArgs {
@@ -58,11 +101,11 @@ function parseArgs(): CliArgs {
     process.exit(1);
   }
 
-  let board: string | undefined;
+  let analysisTypeRaw: string | undefined;
   let inputText: string | undefined;
   let inputFile: string | undefined;
   let output: string | undefined;
-  let modelAlias: string = "flash";
+  let modelAlias = "flash";
   let isJson = false;
 
   for (let i = 0; i < args.length; i++) {
@@ -77,8 +120,9 @@ function parseArgs(): CliArgs {
     };
 
     switch (arg) {
-      case "--board":
-        board = nextArg("--board");
+      case "--type":
+      case "-t":
+        analysisTypeRaw = nextArg("--type / -t");
         break;
       case "--text":
         inputText = nextArg("--text");
@@ -104,16 +148,17 @@ function parseArgs(): CliArgs {
     }
   }
 
-  if (!board) {
-    console.error("エラー: --board オプションが必要です");
+  if (!analysisTypeRaw) {
+    console.error("エラー: --type オプションが必要です");
     printUsage();
     process.exit(1);
   }
-  if (!BOARDS.includes(board as Board)) {
-    console.error(`エラー: 未対応の掲示板です: "${board}"`);
-    console.error(`対応掲示板: ${BOARDS.join(" | ")}`);
+  if (!ANALYSIS_TYPES.includes(analysisTypeRaw as AnalysisType)) {
+    console.error(`エラー: 未対応のタイプです: "${analysisTypeRaw}"`);
+    console.error(`対応タイプ: ${ANALYSIS_TYPES.join(" | ")}`);
     process.exit(1);
   }
+  const analysisType = analysisTypeRaw as AnalysisType;
 
   if (!(modelAlias in MODEL_MAP)) {
     console.error(`エラー: 未対応のモデルです: "${modelAlias}"`);
@@ -127,11 +172,11 @@ function parseArgs(): CliArgs {
       console.error("エラー: --text の後にテキストを指定してください");
       process.exit(1);
     }
-    return { board: board as Board, input: inputText, mode: "text", output, model, isJson };
+    return { analysisType, input: inputText, mode: "text", output, model, isJson };
   }
 
   if (inputFile) {
-    return { board: board as Board, input: inputFile, mode: "file", output, model, isJson };
+    return { analysisType, input: inputFile, mode: "file", output, model, isJson };
   }
 
   console.error("エラー: 入力テキスト (--text) またはファイルパスを指定してください");
@@ -150,11 +195,17 @@ function loadInput(input: string, mode: "file" | "text"): string {
   }
 }
 
-function buildPrompt(board: Board, text: string, isJson: boolean): string {
-  switch (board) {
-    case "5ch":          return build5chPrompt(text, isJson);
+function buildPrompt(analysisType: AnalysisType, text: string, isJson: boolean): string {
+  switch (analysisType) {
+    case "5ch-basic":    return build5chBasicPrompt(text, isJson);
+    case "5ch-blog":     return build5chBlogPrompt(text, isJson);
+    case "youtube":      return buildYoutubePrompt(text, isJson);
+    case "amazon":       return buildAmazonPrompt(text, isJson);
+    case "yahoo-x":      return buildYahooXPrompt(text, isJson);
     case "girlschannel": return buildGirlsChannelPrompt(text, isJson);
-    case "reddit":       return buildRedditPrompt(text, isJson);
+    case "reddit-basic": return buildRedditBasicPrompt(text, isJson);
+    case "reddit-affil": return buildRedditAffilPrompt(text, isJson);
+    case "hackernews":   return buildHackernewsPrompt(text, isJson);
   }
 }
 
@@ -180,11 +231,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { board, input, mode, output, model, isJson } = parseArgs();
+  const { analysisType, input, mode, output, model, isJson } = parseArgs();
   const rawText = loadInput(input, mode);
 
   console.log("=== スレッド抽出・要約ツール ===");
-  console.log(`掲示板     : ${board}`);
+  console.log(`分析タイプ : ${analysisType}（${TYPE_LABELS[analysisType]}）`);
   console.log(`モデル     : ${model}`);
   console.log(`出力形式   : ${isJson ? "JSON" : "テキスト"}`);
   console.log(`入力モード : ${mode === "file" ? `ファイル (${input})` : "テキスト直接入力"}`);
@@ -192,7 +243,7 @@ async function main(): Promise<void> {
   if (output) console.log(`出力先     : ${output}`);
   console.log("");
 
-  const prompt = buildPrompt(board, rawText, isJson);
+  const prompt = buildPrompt(analysisType, rawText, isJson);
   const spinner = createSpinner("AI が分析中...");
   const startTime = performance.now();
 

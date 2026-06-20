@@ -1,0 +1,11 @@
+const JSON_INSTRUCTION =
+  "\n【重要】出力は必ず、以下のキーを持つ有効なJSON形式（Markdownのコードブロックを含まない純粋なJSON文字列）のみを出力してください。キーの構成は適宜最適なものを設計してください。";
+
+export function buildYahooXPrompt(text: string, isJson: boolean = false): string {
+  return `
+以下の【対象テキスト】を、Yahoo!ニュース / X「対立・議論」構造化の要件で処理してください。
+
+【対象テキスト】
+${text}${isJson ? JSON_INSTRUCTION : ""}
+`;
+}
