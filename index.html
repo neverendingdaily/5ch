@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>スレッド抽出・要約ツール (統合版)</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1e293b;
+      --border: #e2e8f0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .card {
+      background-color: var(--card);
+      border-radius: 8px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    h1 { margin-top: 0; font-size: 1.5rem; border-bottom: 2px solid var(--border); padding-bottom: 10px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-weight: bold; margin-bottom: 8px; }
+    input[type="password"], select, textarea {
+      width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 1rem; box-sizing: border-box;
+    }
+    textarea { height: 200px; resize: vertical; }
+    .options-row {
+      display: flex; gap: 20px; align-items: center; flex-wrap: wrap; background: var(--bg); padding: 10px; border-radius: 4px;
+    }
+    .checkbox-label { display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; margin: 0; }
+    button {
+      background-color: var(--primary); color: white; border: none; padding: 12px 24px; font-size: 1rem; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s;
+    }
+    button:hover { background-color: #1d4ed8; }
+    button:disabled { background-color: #94a3b8; cursor: not-allowed; }
+    .result-box {
+      white-space: pre-wrap; background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.9rem;
+    }
+    .download-btn {
+      background-color: #10b981; margin-top: 10px; width: auto;
+    }
+    .download-btn:hover { background-color: #059669; }
+    .header-note { font-size: 0.85rem; color: #64748b; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="card">
+    <h1>🌐 スレッド抽出・要約ツール (統合版)</h1>
+    <p class="header-note">※APIキーはブラウザ上でのみ使用され、外部サーバーに保存されることはありません。</p>
+
+    <div class="form-group">
+      <label for="apiKey">🔑 Gemini APIキー</label>
+      <input type="password" id="apiKey" placeholder="AIzaSy...">
+    </div>
+
+    <div class="form-group">
+      <label for="analysisType">🎯 分析タイプ（プロンプト）</label>
+      <select id="analysisType">
+        <option value="5ch-basic">5ch-basic：5ちゃんねる分析・まとめ</option>
+        <option value="5ch-blog">5ch-blog：まとめサイト記事自動化（HTML出力）</option>
+        <option value="youtube">youtube：YouTube / TikTok「バズコメント」抽出</option>
+        <option value="amazon">amazon：Amazon / サービス「本音とノウハウ」分析</option>
+        <option value="yahoo-x">yahoo-x：Yahoo!ニュース / X「対立・議論」構造化</option>
+        <option value="girlschannel">girlschannel：ガールズちゃんねる特化型分析</option>
+        <option value="reddit-basic">reddit-basic：Reddit特化型分析（日本語翻訳）</option>
+        <option value="reddit-affil">reddit-affil：Reddit JSON解析＆アフィリエイト記事化</option>
+        <option value="hackernews">hackernews：Hacker News / 海外テックフォーラム分析</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="inputText">📄 対象テキスト（全レス・コメントをペースト）</label>
+      <textarea id="inputText" placeholder="ここにスレッドやコメントのテキストを貼り付けてください..."></textarea>
+    </div>
+
+    <div class="form-group options-row">
+      <div>
+        <label for="model" style="display:inline; margin-right:10px;">🧠 モデル:</label>
+        <select id="model" style="width: auto; display: inline-block;">
+          <option value="gemini-2.5-flash">gemini-2.5-flash (高速・推奨)</option>
+          <option value="gemini-2.5-pro">gemini-2.5-pro (高精度・長文向け)</option>
+        </select>
+      </div>
+      <label class="checkbox-label">
+        <input type="checkbox" id="isJson"> 
+        <span>出力をJSON形式に強制する（システム連携用）</span>
+      </label>
+    </div>
+
+    <button id="analyzeBtn" onclick="runAnalysis()">🚀 AIで分析を実行する</button>
+  </div>
+
+  <div class="card" id="resultCard" style="display: none;">
+    <h2>📊 分析結果</h2>
+    <div id="resultOutput" class="result-box"></div>
+    <button id="downloadBtn" class="download-btn" onclick="downloadResult()" style="display: none;">💾 結果をファイルとして保存</button>
+  </div>
+</div>
+
+<script>
+// --- 9種類のプロンプト定義 ---
+const PROMPTS = {
+  "5ch-basic": (text) => `以下の【対象テキスト】に含まれる5ちゃんねるスレッドの全レスを読み込み、客観的かつ綺麗に構造化して分析・要約してください。\n【前提条件】主旨と無関係なコピペ、陰謀論、過激な政治的罵詈雑言、荒らしは排除。\n【出力要件】まともに行われている文脈のある議論、主要な論点、住民のリアルな体感の傾向だけを抽出してください。\n【対象テキスト】\n${text}`,
+  "5ch-blog": (text) => `以下の【対象テキスト】に含まれる5ちゃんねるスレッドの全レスを読み込み、まとめサイトの記事としてそのまま使える形式で出力してください。\n【出力要件】\n1. 抽出とHTML化: 面白いツッコミや役立つ情報を15〜20個厳選し、<div class="res-block"><span class="res-num">番号</span>：<span class="res-name">名無しさん</span><p class="res-text">本文</p></div>のHTML形式で装飾。\n2. バズるタイトル案5つ\n3. 管理人のひとこと(150文字)\n【対象テキスト】\n${text}`,
+  "youtube": (text) => `以下の【対象テキスト】は動画のコメント欄データです。SNSでバズるポテンシャルのある秀逸なコメントを抽出してください。\n【出力要件】以下の3カテゴリごとに5つずつ抽出（冗長な部分は省く）。\n1. 大喜利・ユーモア\n2. 鋭いツッコミ・共感\n3. 豆知識・有益な補足\n【対象テキスト】\n${text}`,
+  "amazon": (text) => `以下の【対象テキスト】は商品/サービスのレビュー群です。購買判断に直結する客観的な情報を抽出・分析してください。\n【出力要件】\n1. 商品の「真のメリット」\n2. 致命的なデメリット・注意点\n3. 意外な使い方・工夫\n4. ペルソナ分析（どんな人におすすめか）\n【対象テキスト】\n${text}`,
+  "yahoo-x": (text) => `以下の【対象テキスト】は話題のニュースやトレンドに対する反応です。議論の構造を客観的に可視化してください。\n【出力要件】\n1. 核心となる争点の明確化\n2. 賛成派と反対派の主張と根拠の比較表\n3. 冷静な第三の視点・代替案（3つ）\n【対象テキスト】\n${text}`,
+  "girlschannel": (text) => `以下の【対象テキスト】はガールズちゃんねるのトピックです。女性たちの「リアルな本音」と「共感」を軸に抽出してください。\n【前提条件】男女対立、説教、主叩きは排除。\n【出力要件】\nA. 圧倒的共感（核となる意見・価値観3〜5つ）\nB. 秀逸な実体験・リアルなエピソード（3〜5つ）\nC. 有益なライフハック・具体的な解決策\n【対象テキスト】\n${text}`,
+  "reddit-basic": (text) => `以下の【対象テキスト】はRedditのスレッドです。すべて自然な「日本語」に翻訳した上で情報を抽出・要約してください。\n【出力要件】\n1. スレッド全体の結論・総括（3行）\n2. Upvote(高評価)の高い核心コメント5選（背景・補足解説付き）\n3. 海外ならではのリアルな本音・カルチャーの違いを感じる書き込み3選\n【対象テキスト】\n${text}`,
+  "reddit-affil": (text) => `以下の【対象テキスト】はRedditの商品レビュー議論です。日本市場向けのアフィリエイト記事・SNS投稿用の構成案を生成してください。\n【出力要件】\n1. 紹介商品の特定と魅力の要約\n2. 購入検討者向けのQ&A\n3. SNS(X/Threads)用 訴求テキスト(140字x3パターン)\n【対象テキスト】\n${text}`,
+  "hackernews": (text) => `以下の【対象テキスト】は海外の技術系掲示板(Hacker News等)の議論です。日本の開発者に向けて技術的な核心を日本語で解説してください。\n【出力要件】\n1. 技術的トレンドのサマリー\n2. 実務で役立つ有益な知見・ベストプラクティス\n3. 競合ツールや代替案(Alternative)の提示\n【対象テキスト】\n${text}`
+};
+
+const JSON_INSTRUCTION = `\n\n【重要】出力は必ず、以下のキーを持つ有効なJSON形式（Markdownのコードブロックを含まない純粋なJSON文字列）のみを出力してください。キーの構成は適宜最適なものを設計してください。`;
+
+let currentResult = "";
+
+// --- Gemini API 呼び出し処理 ---
+async function runAnalysis() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const analysisType = document.getElementById('analysisType').value;
+  const inputText = document.getElementById('inputText').value.trim();
+  const model = document.getElementById('model').value;
+  const isJson = document.getElementById('isJson').checked;
+  const btn = document.getElementById('analyzeBtn');
+  const resultCard = document.getElementById('resultCard');
+  const resultOutput = document.getElementById('resultOutput');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  if (!apiKey) { alert("APIキーを入力してください"); return; }
+  if (!inputText) { alert("対象テキストを入力してください"); return; }
+
+  // プロンプトの組み立て
+  let prompt = PROMPTS[analysisType](inputText);
+  if (isJson) prompt += JSON_INSTRUCTION;
+
+  // UIの状態変更（ローディング）
+  btn.innerText = "⏳ AIが分析中... (数秒〜数十秒かかります)";
+  btn.disabled = true;
+  resultCard.style.display = "block";
+  resultOutput.innerText = "通信中...";
+  downloadBtn.style.display = "none";
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }]
+    };
+    if (isJson) {
+      payload.generationConfig = { responseMimeType: "application/json" };
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || "API呼び出しエラー");
+    }
+
+    const data = await response.json();
+    currentResult = data.candidates[0].content.parts[0].text;
+    resultOutput.innerText = currentResult;
+    downloadBtn.style.display = "inline-block";
+
+  } catch (error) {
+    resultOutput.innerText = "❌ エラーが発生しました:\n" + error.message;
+  } finally {
+    // UIを元に戻す
+    btn.innerText = "🚀 AIで分析を実行する";
+    btn.disabled = false;
+  }
+}
+
+// --- ダウンロード機能 ---
+function downloadResult() {
+  if (!currentResult) return;
+  const isJson = document.getElementById('isJson').checked;
+  const type = document.getElementById('analysisType').value;
+  const extension = isJson ? "json" : "txt";
+  const filename = `analysis_${type}_${new Date().getTime()}.${extension}`;
+  
+  const blob = new Blob([currentResult], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
